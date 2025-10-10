@@ -73,6 +73,7 @@ var meCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("Burnmail v{{.Version}}\n")
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(messagesCmd)
 	rootCmd.AddCommand(deleteCmd)
