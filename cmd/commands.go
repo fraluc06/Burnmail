@@ -342,7 +342,7 @@ func openInBrowser(message *api.MessageDetail) {
 	}
 }
 
-func retryWithBackoff(ctx context.Context, fn func() (interface{}, error)) (interface{}, error) {
+func retryWithBackoff(ctx context.Context, fn func() (any, error)) (any, error) {
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
 		select {
 		case <-ctx.Done():
@@ -360,10 +360,7 @@ func retryWithBackoff(ctx context.Context, fn func() (interface{}, error)) (inte
 		}
 
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
-			delay := time.Duration(math.Pow(2, float64(attempt))) * retryBaseDelay
-			if delay > retryMaxDelay {
-				delay = retryMaxDelay
-			}
+			delay := min(time.Duration(math.Pow(2, float64(attempt)))*retryBaseDelay, retryMaxDelay)
 
 			select {
 			case <-time.After(delay):

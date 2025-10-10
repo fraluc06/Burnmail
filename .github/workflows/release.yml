@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 0.1.0)'
+        required: true
+        type: string
+      release_type:
+        description: 'Release type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release:
+    name: Prepare Release PR
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Validate version format
+      run: |
+        if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Error: Version must be in format X.Y.Z"
+          exit 1
+        fi
+
+    - name: Check if tag exists
+      run: |
+        if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+          echo "Error: Tag v${{ inputs.version }} already exists"
+          exit 1
+        fi
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "Generating changelog..."
+        
+        # Get the latest tag
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
+        if [ -z "$LATEST_TAG" ]; then
+          echo "First release - including all commits"
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+        else
+          echo "Generating changelog since $LATEST_TAG"
+          CHANGELOG=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+        fi
+        
+        # Save changelog to file for PR body
+        cat > /tmp/changelog.txt << EOF
+        ${CHANGELOG}
+        EOF
+        
+        # Set output for later use
+        {
+          echo 'changelog<<EOF'
+          cat /tmp/changelog.txt
+          echo EOF
+        } >> $GITHUB_OUTPUT
+
+    - name: Create release branch
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git checkout -b release/v${{ inputs.version }}
+
+    - name: Update version in code
+      run: |
+        sed -i 's/var Version = ".*"/var Version = "${{ inputs.version }}"/' main.go
+        sed -i 's/VERSION=".*"/VERSION="${{ inputs.version }}"/' build.sh
+        sed -i 's/\$Version = ".*"/\$Version = "${{ inputs.version }}"/' build.ps1
+
+    - name: Commit version changes
+      run: |
+        git add main.go build.sh build.ps1
+        git commit -m "chore: bump version to ${{ inputs.version }}"
+        git push origin release/v${{ inputs.version }}
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v6
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: release/v${{ inputs.version }}
+        title: "🚀 Release v${{ inputs.version }}"
+        body: |
+          ## 🔥 Release v${{ inputs.version }}
+          
+          This PR prepares the release for version **v${{ inputs.version }}**.
+          
+          ### 📋 Changes in this release
+          
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ### ✅ Checklist
+          
+          - [x] Tests passed
+          - [x] Version updated in code
+          - [x] Changelog generated
+          
+          ### 🎯 Next Steps
+          
+          1. Review the changes
+          2. Merge this PR
+          3. The release will be automatically created after merge
+          
+          ---
+          
+          **Release Type**: ${{ inputs.release_type }}
+        labels: |
+          release
+          ${{ inputs.release_type }}
+        assignees: ${{ github.actor }}
