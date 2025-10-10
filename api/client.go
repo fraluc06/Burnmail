@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,13 +19,21 @@ var (
 )
 
 type Client struct {
-	HTTPClient *http.Client
-	token      string
-	mu         sync.RWMutex
+	HTTPClient  *http.Client
+	token       string
+	mu          sync.RWMutex
+	rateLimiter chan struct{}
+	lastRequest time.Time
+	minDelay    time.Duration
 }
 
 func GetClient() *Client {
 	clientOnce.Do(func() {
+		limiter := make(chan struct{}, 5)
+		for i := 0; i < 5; i++ {
+			limiter <- struct{}{}
+		}
+
 		clientInstance = &Client{
 			HTTPClient: &http.Client{
 				Timeout: 30 * time.Second,
@@ -32,15 +41,32 @@ func GetClient() *Client {
 					MaxIdleConns:        10,
 					MaxIdleConnsPerHost: 10,
 					IdleConnTimeout:     90 * time.Second,
+					DisableKeepAlives:   false,
+					DisableCompression:  false,
 				},
 			},
+			rateLimiter: limiter,
+			minDelay:    200 * time.Millisecond,
 		}
 	})
 	return clientInstance
 }
 
-func NewClient() *Client {
-	return GetClient()
+func (c *Client) waitForRateLimit() {
+	<-c.rateLimiter
+
+	c.mu.Lock()
+	since := time.Since(c.lastRequest)
+	if since < c.minDelay {
+		time.Sleep(c.minDelay - since)
+	}
+	c.lastRequest = time.Now()
+	c.mu.Unlock()
+
+	go func() {
+		time.Sleep(c.minDelay)
+		c.rateLimiter <- struct{}{}
+	}()
 }
 
 func (c *Client) SetToken(token string) {
@@ -99,14 +125,14 @@ type To struct {
 
 type MessageDetail struct {
 	Message
-	CC            []any     `json:"cc"`
-	BCC           []any     `json:"bcc"`
-	Flagged       bool      `json:"flagged"`
-	Verifications []any     `json:"verifications"`
-	Retention     bool      `json:"retention"`
-	RetentionDate time.Time `json:"retentionDate"`
-	Text          string    `json:"text"`
-	HTML          []string  `json:"html"`
+	CC            []any                  `json:"cc"`
+	BCC           []any                  `json:"bcc"`
+	Flagged       bool                   `json:"flagged"`
+	Verifications map[string]interface{} `json:"verifications"`
+	Retention     bool                   `json:"retention"`
+	RetentionDate time.Time              `json:"retentionDate"`
+	Text          string                 `json:"text"`
+	HTML          []string               `json:"html"`
 }
 
 type AuthResponse struct {
@@ -119,7 +145,12 @@ type hydraResponse struct {
 }
 
 func (c *Client) GetDomains() ([]Domain, error) {
-	req, err := http.NewRequest("GET", BaseURL+"/domains", nil)
+	c.waitForRateLimit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", BaseURL+"/domains", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +159,7 @@ func (c *Client) GetDomains() ([]Domain, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get domains: status %d", resp.StatusCode)
@@ -174,7 +205,7 @@ func (c *Client) CreateAccount(address, password string) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
@@ -204,7 +235,7 @@ func (c *Client) Login(address, password string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -221,7 +252,12 @@ func (c *Client) Login(address, password string) (string, error) {
 }
 
 func (c *Client) GetMessages() ([]Message, error) {
-	req, err := http.NewRequest("GET", BaseURL+"/messages", nil)
+	c.waitForRateLimit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", BaseURL+"/messages", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +268,7 @@ func (c *Client) GetMessages() ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get messages: status %d", resp.StatusCode)
@@ -264,7 +300,12 @@ func (c *Client) GetMessages() ([]Message, error) {
 }
 
 func (c *Client) GetMessage(id string) (*MessageDetail, error) {
-	req, err := http.NewRequest("GET", BaseURL+"/messages/"+id, nil)
+	c.waitForRateLimit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", BaseURL+"/messages/"+id, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +316,7 @@ func (c *Client) GetMessage(id string) (*MessageDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get message: status %d", resp.StatusCode)
@@ -301,7 +342,7 @@ func (c *Client) DeleteAccount(accountID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("failed to delete account: status %d", resp.StatusCode)
@@ -322,7 +363,7 @@ func (c *Client) GetAccount(accountID string) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get account: status %d", resp.StatusCode)
@@ -334,4 +375,46 @@ func (c *Client) GetAccount(accountID string) (*Account, error) {
 	}
 
 	return &account, nil
+}
+
+func (c *Client) DeleteMessage(id string) error {
+	req, err := http.NewRequest("DELETE", BaseURL+"/messages/"+id, nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.GetToken())
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("failed to delete message: status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func (c *Client) MarkMessageAsRead(id string) error {
+	req, err := http.NewRequest("PATCH", BaseURL+"/messages/"+id, nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.GetToken())
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to mark message as read: status %d", resp.StatusCode)
+	}
+
+	return nil
 }

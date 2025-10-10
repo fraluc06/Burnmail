@@ -1,11 +1,20 @@
-.PHONY: build install clean run test
+.PHONY: build install clean run test bench deps lint
 
 # Binary name
 BINARY_NAME=burnmail
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
+LDFLAGS=-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)
 
-# Build the project
+# Build the project (optimized)
 build:
-	go build -o $(BINARY_NAME) -ldflags="-s -w" .
+	@echo "Building $(BINARY_NAME) $(VERSION)..."
+	go build -o $(BINARY_NAME) -ldflags="$(LDFLAGS)" -trimpath .
+	@echo "Binary size: $$(du -h $(BINARY_NAME) | cut -f1)"
+
+# Build for development (with debug symbols)
+build-dev:
+	go build -o $(BINARY_NAME) .
 
 # Install to /usr/local/bin
 install: build
@@ -13,17 +22,21 @@ install: build
 
 # Build for multiple platforms
 build-all:
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_NAME)-linux-amd64 -ldflags="-s -w" .
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_NAME)-linux-arm64 -ldflags="-s -w" .
-	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_NAME)-darwin-amd64 -ldflags="-s -w" .
-	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_NAME)-darwin-arm64 -ldflags="-s -w" .
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_NAME)-windows-amd64.exe -ldflags="-s -w" .
+	@echo "Building for multiple platforms..."
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_NAME)-linux-amd64 -ldflags="$(LDFLAGS)" -trimpath .
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_NAME)-linux-arm64 -ldflags="$(LDFLAGS)" -trimpath .
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_NAME)-darwin-amd64 -ldflags="$(LDFLAGS)" -trimpath .
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_NAME)-darwin-arm64 -ldflags="$(LDFLAGS)" -trimpath .
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_NAME)-windows-amd64.exe -ldflags="$(LDFLAGS)" -trimpath .
+	@echo "Build complete. Binary sizes:"
+	@du -h $(BINARY_NAME)-*
 
 # Clean build artifacts
 clean:
 	go clean
 	rm -f $(BINARY_NAME)
 	rm -f $(BINARY_NAME)-*
+	rm -f ~/.burnmail-cache.json
 
 # Run the application
 run:
@@ -31,9 +44,29 @@ run:
 
 # Run tests
 test:
-	go test -v ./...
+	go test -v -race -cover ./...
+
+# Run benchmarks
+bench:
+	go test -bench=. -benchmem ./...
+
+# Run linter
+lint:
+	go vet ./...
+	gofmt -s -w .
 
 # Download dependencies
 deps:
 	go mod download
 	go mod tidy
+	go mod verify
+
+# Show binary info
+info:
+	@echo "Version: $(VERSION)"
+	@echo "Build Time: $(BUILD_TIME)"
+	@if [ -f $(BINARY_NAME) ]; then \
+		echo "Binary: $(BINARY_NAME)"; \
+		ls -lh $(BINARY_NAME); \
+		file $(BINARY_NAME); \
+	fi

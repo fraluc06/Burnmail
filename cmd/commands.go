@@ -55,8 +55,14 @@ var generateCmd = &cobra.Command{
 var messagesCmd = &cobra.Command{
 	Use:     "m",
 	Aliases: []string{"messages", "inbox"},
-	Short:   "View inbox messages",
-	Run:     viewMessages,
+	Short:   "View inbox messages (interactive TUI)",
+	Run:     viewMessagesTUI,
+}
+
+var messagesListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List messages (classic view)",
+	Run:   viewMessages,
 }
 
 var deleteCmd = &cobra.Command{
@@ -76,6 +82,7 @@ func init() {
 	rootCmd.SetVersionTemplate("Burnmail v{{.Version}}\n")
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(messagesCmd)
+	messagesCmd.AddCommand(messagesListCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(meCmd)
 }
@@ -83,12 +90,12 @@ func init() {
 func Execute() {
 	rootCmd.Version = Version
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func generateEmail(cmd *cobra.Command, args []string) {
+func generateEmail(_ *cobra.Command, _ []string) {
 	if storage.Exists() {
 		existingAccount, _ := storage.Load()
 		if existingAccount != nil {
@@ -171,12 +178,13 @@ func generateEmail(cmd *cobra.Command, args []string) {
 		fmt.Printf("\n%s Email created and copied to clipboard!\n", green("✓"))
 	} else {
 		fmt.Printf("\n%s Email created!\n", green("✓"))
+		fmt.Printf("%s Warning: Failed to copy to clipboard: %v\n", yellow("⚠"), err)
 	}
 
 	fmt.Printf("\n%s\n\n", green(address))
 }
 
-func viewMessages(cmd *cobra.Command, args []string) {
+func viewMessages(_ *cobra.Command, _ []string) {
 	accountData, err := storage.Load()
 	if err != nil || accountData == nil {
 		fmt.Printf("%s No account found. Generate one first with '%s'\n", red("✗"), yellow("burnmail g"))
@@ -250,7 +258,21 @@ func viewMessages(cmd *cobra.Command, args []string) {
 	fmt.Println()
 }
 
-func deleteAccount(cmd *cobra.Command, args []string) {
+func viewMessagesTUI(_ *cobra.Command, _ []string) {
+	accountData, err := storage.Load()
+	if err != nil || accountData == nil {
+		fmt.Printf("%s No account found. Generate one first with '%s'\n", red("✗"), yellow("burnmail g"))
+		return
+	}
+
+	client := api.GetClient()
+
+	if err := runTUI(accountData, client); err != nil {
+		fmt.Printf("%s TUI error: %v\n", red("✗"), err)
+	}
+}
+
+func deleteAccount(_ *cobra.Command, _ []string) {
 	accountData, err := storage.Load()
 	if err != nil || accountData == nil {
 		fmt.Printf("%s No account found. Generate one first with '%s'\n", red("✗"), yellow("burnmail g"))
@@ -278,7 +300,7 @@ func deleteAccount(cmd *cobra.Command, args []string) {
 	fmt.Printf("%s Account deleted successfully\n", green("✓"))
 }
 
-func showAccount(cmd *cobra.Command, args []string) {
+func showAccount(_ *cobra.Command, _ []string) {
 	accountData, err := storage.Load()
 	if err != nil || accountData == nil {
 		fmt.Printf("%s No account found. Generate one first with '%s'\n", red("✗"), yellow("burnmail g"))
@@ -314,15 +336,15 @@ func openInBrowser(message *api.MessageDetail) {
 	}
 
 	if _, err := tmpFile.WriteString(htmlBuilder.String()); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFilePath)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFilePath)
 		return
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	go func() {
 		time.Sleep(htmlFileCleanupDelay)
-		os.Remove(tmpFilePath)
+		_ = os.Remove(tmpFilePath)
 	}()
 
 	var execCmd *exec.Cmd
@@ -334,12 +356,12 @@ func openInBrowser(message *api.MessageDetail) {
 	case "windows":
 		execCmd = exec.Command("cmd", "/c", "start", tmpFilePath)
 	default:
-		os.Remove(tmpFilePath)
+		_ = os.Remove(tmpFilePath)
 		return
 	}
 
 	if err := execCmd.Start(); err != nil {
-		os.Remove(tmpFilePath)
+		_ = os.Remove(tmpFilePath)
 	}
 }
 
