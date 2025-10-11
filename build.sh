@@ -6,7 +6,7 @@
 set -e
 
 BINARY_NAME="burnmail"
-VERSION="0.1.0"
+VERSION="1.0.0"
 
 echo "🔨 Building Burnmail v${VERSION}"
 echo ""
