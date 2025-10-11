@@ -5,6 +5,12 @@ on:
     types: [closed]
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,7 +18,9 @@ permissions:
 jobs:
   release:
     name: Create Release
-    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     
     steps:
@@ -22,11 +30,15 @@ jobs:
         ref: main
         fetch-depth: 0
 
-    - name: Extract version from branch
+    - name: Extract version
       id: version
       run: |
-        VERSION="${{ github.event.pull_request.head.ref }}"
-        VERSION="${VERSION#release/v}"
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          VERSION="${{ inputs.version }}"
+        else
+          VERSION="${{ github.event.pull_request.head.ref }}"
+          VERSION="${VERSION#release/v}"
+        fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Extracted version: $VERSION"
 
