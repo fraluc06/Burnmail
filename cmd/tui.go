@@ -32,6 +32,7 @@ const (
 const (
 	autoRefreshInterval = 10 * time.Second
 	cacheFileName       = ".burnmail-cache.json"
+	cacheExpiry         = 5 * time.Minute
 )
 
 type sortMode int
@@ -184,8 +185,8 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	cached := loadCache()
-	msgs := []api.Message{}
-	if cached != nil && time.Since(cached.Timestamp) < 5*time.Minute {
+	var msgs []api.Message
+	if cached != nil && time.Since(cached.Timestamp) < cacheExpiry {
 		msgs = cached.Messages
 	}
 
@@ -254,11 +255,25 @@ func deleteMessage(client *api.Client, id string) tea.Cmd {
 
 func bulkDeleteMessages(client *api.Client, ids []string) tea.Cmd {
 	return func() tea.Msg {
+		type result struct {
+			err error
+		}
+		results := make(chan result, len(ids))
+
 		for _, id := range ids {
-			if err := client.DeleteMessage(id); err != nil {
-				return errMsg(err)
+			go func(msgID string) {
+				err := client.DeleteMessage(msgID)
+				results <- result{err: err}
+			}(id)
+		}
+
+		for range ids {
+			res := <-results
+			if res.err != nil {
+				return errMsg(res.err)
 			}
 		}
+
 		return bulkDeletedMsg{}
 	}
 }
@@ -292,7 +307,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case messagesLoadedMsg:
-		m.messages = []api.Message(msg)
+		m.messages = msg
 		m.loading = false
 		m.retryCount = 0
 		m.lastUpdate = time.Now()
@@ -303,7 +318,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case messageDetailLoadedMsg:
-		m.selectedMsg = (*api.MessageDetail)(msg)
+		m.selectedMsg = msg
 		m.messageDetails[m.selectedMsg.ID] = m.selectedMsg
 		m.currentView = detailView
 		m.loading = false
@@ -328,18 +343,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case bulkDeletedMsg:
-		m.statusMessage = fmt.Sprintf("%d messages deleted", len(m.selectedItems))
+		deletedCount := len(m.selectedItems)
+		m.statusMessage = fmt.Sprintf("%d messages deleted", deletedCount)
+
+		selectedIDs := make(map[string]bool, deletedCount)
+		for idx := range m.selectedItems {
+			if idx < len(m.filteredMsgs) {
+				selectedIDs[m.filteredMsgs[idx].ID] = true
+			}
+		}
+
+		newMessages := make([]api.Message, 0, len(m.messages)-deletedCount)
+		for _, msg := range m.messages {
+			if !selectedIDs[msg.ID] {
+				newMessages = append(newMessages, msg)
+			}
+		}
+		m.messages = newMessages
+
 		m.selectedItems = make(map[int]bool)
 		m.bulkMode = false
-		m.loading = true
-		return m, loadMessages(m.client)
+		m.filterMessages()
+		m.sortMessages()
+		m.updateTableRows()
+		saveCache(m.messages)
+		return m, nil
 
 	case messageDeletedMsg:
 		m.statusMessage = "Message deleted"
 		m.currentView = listView
-		m.selectedMsg = nil
-		m.loading = true
-		return m, loadMessages(m.client)
+		if m.selectedMsg != nil {
+			msgID := m.selectedMsg.ID
+			m.selectedMsg = nil
+			for i := range m.messages {
+				if m.messages[i].ID == msgID {
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					break
+				}
+			}
+			m.filterMessages()
+			m.sortMessages()
+			m.updateTableRows()
+			saveCache(m.messages)
+		}
+		return m, nil
 
 	case tickMsg:
 		if m.autoRefresh && m.currentView == listView && !m.loading {
@@ -423,6 +470,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+
+		case "j", "down":
+			if m.currentView == listView {
+				m.table.MoveDown(1)
+				return m, nil
+			}
+
+		case "k", "up":
+			if m.currentView == listView {
+				m.table.MoveUp(1)
+				return m, nil
+			}
 
 		case "r":
 			if m.currentView == listView {
@@ -564,13 +623,20 @@ func (m model) View() string {
 
 	var s strings.Builder
 
-	title := fmt.Sprintf("Burnmail - %s (%d messages)", m.accountData.Address, len(m.messages))
-	s.WriteString(titleStyle.Render(title) + "\n")
+	if m.currentView != helpView {
+		msgCount := len(m.messages)
+		msgWord := "messages"
+		if msgCount == 1 {
+			msgWord = "message"
+		}
+		title := fmt.Sprintf("Burnmail - %s (%d %s)", m.accountData.Address, msgCount, msgWord)
+		s.WriteString(titleStyle.Render(title) + "\n")
 
-	if m.statusMessage != "" {
-		s.WriteString(statusStyle.Render("▸ "+m.statusMessage) + "\n")
+		if m.statusMessage != "" {
+			s.WriteString(statusStyle.Render("▸ "+m.statusMessage) + "\n")
+		}
+		s.WriteString("\n")
 	}
-	s.WriteString("\n")
 
 	if m.currentView == listView {
 		var searchBox string
@@ -585,22 +651,23 @@ func (m model) View() string {
 		}
 
 		s.WriteString(searchBox + "\n\n")
-		s.WriteString(tableStyle.Render(m.table.View()) + "\n")
+		s.WriteString(tableStyle.Render(m.table.View()) + "\n\n")
 
 		sortNames := []string{"Date", "Sender", "Subject"}
 		sortInfo := fmt.Sprintf("Sort: %s", sortNames[m.sortBy])
 		s.WriteString(helpStyle.Render(sortInfo) + " ")
 		s.WriteString(helpStyle.Render("• Press "+keyStyle.Render("?")+" for help") + "\n")
 
-		helpText := "↑/↓ • enter • " + keyStyle.Render("s") + ":sort • " + keyStyle.Render("c") + ":copy • " + keyStyle.Render("v") + ":bulk • " + keyStyle.Render("r") + ":refresh • " + keyStyle.Render("/") + ":search"
+		helpText := keyStyle.Render("↑/↓") + "/" + keyStyle.Render("j/k") + ":navigate " + keyStyle.Render("enter") + ":open " + keyStyle.Render("s") + ":sort " + keyStyle.Render("c") + ":copy " + keyStyle.Render("v") + ":bulk " + keyStyle.Render("r") + ":refresh " + keyStyle.Render("/") + ":search "
 		if m.autoRefresh {
-			helpText += " • " + keyStyle.Render("a") + ":auto:" + keyStyle.Render("ON")
+			helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("ON")
 		} else {
-			helpText += " • " + keyStyle.Render("a") + ":auto:" + keyStyle.Render("OFF")
+			helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("OFF")
 		}
 		if m.bulkMode {
-			helpText += fmt.Sprintf(" • BULK:"+keyStyle.Render("%d")+" • space • d:delete", len(m.selectedItems))
+			helpText += " " + keyStyle.Render("space") + ":select " + keyStyle.Render("d") + ":delete"
 		}
+		helpText += " " + keyStyle.Render("q") + ":quit"
 		s.WriteString(helpStyle.Render(helpText))
 	} else if m.currentView == helpView {
 		s.WriteString(renderHelpScreen(m.width, m.height))
@@ -621,11 +688,15 @@ func (m *model) filterMessages() {
 	}
 
 	query := strings.ToLower(m.searchInput.Value())
-	m.filteredMsgs = []api.Message{}
+	m.filteredMsgs = make([]api.Message, 0, len(m.messages))
 	for _, msg := range m.messages {
-		if strings.Contains(strings.ToLower(msg.From.Address), query) ||
-			strings.Contains(strings.ToLower(msg.Subject), query) ||
-			strings.Contains(strings.ToLower(msg.Intro), query) {
+		fromLower := strings.ToLower(msg.From.Address)
+		subjectLower := strings.ToLower(msg.Subject)
+		introLower := strings.ToLower(msg.Intro)
+
+		if strings.Contains(fromLower, query) ||
+			strings.Contains(subjectLower, query) ||
+			strings.Contains(introLower, query) {
 			m.filteredMsgs = append(m.filteredMsgs, msg)
 		}
 	}
@@ -683,7 +754,7 @@ func (m *model) updateTableRows() {
 		}
 	}
 
-	rows := []table.Row{}
+	rows := make([]table.Row, 0, len(m.filteredMsgs))
 	for i, msg := range m.filteredMsgs {
 		checkbox := " "
 		if m.selectedItems[i] {
@@ -763,16 +834,18 @@ func truncate(s string, max int) string {
 		return s[:max]
 	}
 
+	const ellipsis = "..."
 	words := strings.Fields(s)
-	var result strings.Builder
+	result := strings.Builder{}
+	result.Grow(max)
 	length := 0
 
 	for _, word := range words {
-		if length+len(word)+1 > max-3 {
+		if length+len(word)+1 > max-len(ellipsis) {
 			break
 		}
 		if length > 0 {
-			result.WriteString(" ")
+			result.WriteByte(' ')
 			length++
 		}
 		result.WriteString(word)
@@ -780,10 +853,11 @@ func truncate(s string, max int) string {
 	}
 
 	if result.Len() == 0 {
-		return s[:max-3] + "..."
+		return s[:max-len(ellipsis)] + ellipsis
 	}
 
-	return result.String() + "..."
+	result.WriteString(ellipsis)
+	return result.String()
 }
 
 func loadCache() *messageCache {
@@ -851,7 +925,7 @@ func (m model) executeConfirmedAction() (tea.Model, tea.Cmd) {
 		}
 
 	case "delete_bulk":
-		ids := []string{}
+		var ids []string
 		for idx := range m.selectedItems {
 			if idx < len(m.filteredMsgs) {
 				ids = append(ids, m.filteredMsgs[idx].ID)
@@ -886,7 +960,7 @@ func renderHelpScreen(_, _ int) string {
 		{
 			title: "List View",
 			items: [][2]string{
-				{"↑/↓", "Navigate messages"},
+				{"↑/↓ or j/k", "Navigate messages"},
 				{"enter", "View selected message"},
 				{"/", "Search messages"},
 				{"s", "Cycle sort (Date → Sender → Subject)"},
@@ -900,7 +974,7 @@ func renderHelpScreen(_, _ int) string {
 		{
 			title: "Detail View",
 			items: [][2]string{
-				{"↑/↓", "Scroll message content"},
+				{"↑/↓ or j/k", "Scroll message content"},
 				{"o", "Open HTML content in browser"},
 				{"c", "Copy message content to clipboard"},
 				{"d", "Delete message"},
