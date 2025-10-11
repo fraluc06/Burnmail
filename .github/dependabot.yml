@@ -7,7 +7,6 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Europe/Rome"
-    open-pull-request-limit: 10
     labels:
       - "dependencies"
       - "go"
