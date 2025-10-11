@@ -106,6 +106,7 @@ jobs:
       uses: peter-evans/create-pull-request@v6
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
+        base: main
         branch: release/v${{ inputs.version }}
         title: "🚀 Release v${{ inputs.version }}"
         body: |
