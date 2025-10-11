@@ -1,10 +1,14 @@
 package storage
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/zalando/go-keyring"
 )
 
 type AccountData struct {
@@ -14,6 +18,11 @@ type AccountData struct {
 	AccountID string `json:"accountId"`
 	CreatedAt string `json:"createdAt"`
 }
+
+const (
+	keyringService = "burnmail"
+	keyringUser    = "default"
+)
 
 var (
 	configPath     string
@@ -33,6 +42,24 @@ func getConfigPath() (string, error) {
 	return configPath, configPathErr
 }
 
+func getOrCreatePassword() (string, error) {
+	password, err := keyring.Get(keyringService, keyringUser)
+	if err == keyring.ErrNotFound {
+		randomBytes := make([]byte, 32)
+		if _, err := rand.Read(randomBytes); err != nil {
+			return "", err
+		}
+		password = base64.StdEncoding.EncodeToString(randomBytes)
+
+		if err := keyring.Set(keyringService, keyringUser, password); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+	return password, nil
+}
+
 func Save(data *AccountData) error {
 	path, err := getConfigPath()
 	if err != nil {
@@ -44,7 +71,17 @@ func Save(data *AccountData) error {
 		return err
 	}
 
-	return os.WriteFile(path, jsonData, 0600)
+	password, err := getOrCreatePassword()
+	if err != nil {
+		return os.WriteFile(path, jsonData, 0600)
+	}
+
+	encrypted, err := Encrypt(jsonData, password)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, encrypted, 0600)
 }
 
 func Load() (*AccountData, error) {
@@ -59,6 +96,14 @@ func Load() (*AccountData, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	password, err := getOrCreatePassword()
+	if err == nil {
+		decrypted, err := Decrypt(data, password)
+		if err == nil {
+			data = decrypted
+		}
 	}
 
 	var account AccountData
@@ -79,6 +124,8 @@ func Delete() error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+
+	_ = keyring.Delete(keyringService, keyringUser)
 
 	return nil
 }

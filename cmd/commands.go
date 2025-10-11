@@ -87,6 +87,46 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+var completionCmd = &cobra.Command{
+	Use:   "completion [bash|zsh|fish]",
+	Short: "Generate shell completion scripts",
+	Long: `Generate shell completion scripts for burnmail.
+
+To load completions:
+
+Bash:
+  $ source <(burnmail completion bash)
+  # To load completions for each session, execute once:
+  # Linux:
+  $ burnmail completion bash > /etc/bash_completion.d/burnmail
+  # macOS:
+  $ burnmail completion bash > $(brew --prefix)/etc/bash_completion.d/burnmail
+
+Zsh:
+  $ source <(burnmail completion zsh)
+  # To load completions for each session, execute once:
+  $ burnmail completion zsh > "${fpath[1]}/_burnmail"
+
+Fish:
+  $ burnmail completion fish | source
+  # To load completions for each session, execute once:
+  $ burnmail completion fish > ~/.config/fish/completions/burnmail.fish
+`,
+	ValidArgs:             []string{"bash", "zsh", "fish"},
+	Args:                  cobra.ExactArgs(1),
+	DisableFlagsInUseLine: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		switch args[0] {
+		case "bash":
+			_ = cmd.Root().GenBashCompletion(os.Stdout)
+		case "zsh":
+			_ = cmd.Root().GenZshCompletion(os.Stdout)
+		case "fish":
+			_ = cmd.Root().GenFishCompletion(os.Stdout, true)
+		}
+	},
+}
+
 func init() {
 	rootCmd.SetVersionTemplate("Burnmail v{{.Version}}\n")
 	rootCmd.AddCommand(generateCmd)
@@ -95,6 +135,7 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(meCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(completionCmd)
 }
 
 func Execute() {

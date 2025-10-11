@@ -123,6 +123,14 @@ type To struct {
 	Name    string `json:"name"`
 }
 
+type Attachment struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	Size        int    `json:"size"`
+	DownloadURL string `json:"downloadUrl"`
+}
+
 type MessageDetail struct {
 	Message
 	CC            []any                  `json:"cc"`
@@ -133,6 +141,7 @@ type MessageDetail struct {
 	RetentionDate time.Time              `json:"retentionDate"`
 	Text          string                 `json:"text"`
 	HTML          []string               `json:"html"`
+	Attachments   []Attachment           `json:"attachments"`
 }
 
 type AuthResponse struct {
@@ -417,4 +426,31 @@ func (c *Client) MarkMessageAsRead(id string) error {
 	}
 
 	return nil
+}
+
+func (c *Client) DownloadAttachment(messageID, attachmentID string) ([]byte, error) {
+	c.waitForRateLimit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("%s/messages/%s/attachment/%s", BaseURL, messageID, attachmentID)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.GetToken())
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download attachment: status %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
 }

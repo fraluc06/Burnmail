@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jaytaylor/html2text"
 )
 
 type view int
@@ -333,10 +335,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selectedMsg.Text != "" {
 			content.WriteString(m.selectedMsg.Text)
 		} else if len(m.selectedMsg.HTML) > 0 {
-			content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
+			var htmlBuilder strings.Builder
 			for _, h := range m.selectedMsg.HTML {
-				content.WriteString(h)
+				htmlBuilder.WriteString(h)
 			}
+			text, err := html2text.FromString(htmlBuilder.String(), html2text.Options{
+				PrettyTables: true,
+				OmitLinks:    false,
+			})
+			if err == nil {
+				content.WriteString(text)
+				content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+				content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
+			} else {
+				content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
+				for _, h := range m.selectedMsg.HTML {
+					content.WriteString(h)
+				}
+			}
+		}
+
+		if len(m.selectedMsg.Attachments) > 0 {
+			content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+			content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(m.selectedMsg.Attachments))) + "\n\n")
+			for i, att := range m.selectedMsg.Attachments {
+				sizeKB := float64(att.Size) / 1024.0
+				content.WriteString(fmt.Sprintf("%d. %s (%s, %.1f KB)\n",
+					i+1,
+					keyStyle.Render(att.Filename),
+					descStyle.Render(att.ContentType),
+					sizeKB))
+			}
+			content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
 		}
 
 		m.viewport.SetContent(content.String())
@@ -578,11 +608,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if cached.Text != "" {
 							content.WriteString(cached.Text)
 						} else if len(cached.HTML) > 0 {
-							content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
+							var htmlBuilder strings.Builder
 							for _, h := range cached.HTML {
-								content.WriteString(h)
+								htmlBuilder.WriteString(h)
+							}
+							text, err := html2text.FromString(htmlBuilder.String(), html2text.Options{
+								PrettyTables: true,
+								OmitLinks:    false,
+							})
+							if err == nil {
+								content.WriteString(text)
+								content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+								content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
+							} else {
+								content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
+								for _, h := range cached.HTML {
+									content.WriteString(h)
+								}
 							}
 						}
+
+						if len(cached.Attachments) > 0 {
+							content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+							content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(cached.Attachments))) + "\n\n")
+							for i, att := range cached.Attachments {
+								sizeKB := float64(att.Size) / 1024.0
+								content.WriteString(fmt.Sprintf("%d. %s (%s, %.1f KB)\n",
+									i+1,
+									keyStyle.Render(att.Filename),
+									descStyle.Render(att.ContentType),
+									sizeKB))
+							}
+							content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
+						}
+
 						m.viewport.SetContent(content.String())
 						return m, nil
 					}
@@ -596,6 +655,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.selectedMsg.HTML) > 0 {
 					openInBrowser(m.selectedMsg)
 				}
+			}
+
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			if m.currentView == detailView && m.selectedMsg != nil && len(m.selectedMsg.Attachments) > 0 {
+				idx := int(msg.String()[0] - '1')
+				if idx < len(m.selectedMsg.Attachments) {
+					go downloadAttachment(m.client, m.selectedMsg.ID, m.selectedMsg.Attachments[idx])
+					m.statusMessage = fmt.Sprintf("Downloading %s...", m.selectedMsg.Attachments[idx].Filename)
+				}
+			}
+
+		case "A":
+			if m.currentView == detailView && m.selectedMsg != nil && len(m.selectedMsg.Attachments) > 0 {
+				for _, att := range m.selectedMsg.Attachments {
+					go downloadAttachment(m.client, m.selectedMsg.ID, att)
+				}
+				m.statusMessage = fmt.Sprintf("Downloading %d attachments...", len(m.selectedMsg.Attachments))
 			}
 		}
 	}
@@ -978,6 +1054,8 @@ func renderHelpScreen(_, _ int) string {
 				{"o", "Open HTML content in browser"},
 				{"c", "Copy message content to clipboard"},
 				{"d", "Delete message"},
+				{"1-9", "Download attachment by number"},
+				{"shift+a", "Download all attachments"},
 				{"esc", "Back to list"},
 			},
 		},
@@ -1008,6 +1086,64 @@ func renderConfirmDialog(description string) string {
 	))
 
 	return s.String()
+}
+
+func getDownloadsDir() string {
+	var downloadsDir string
+
+	switch runtime.GOOS {
+	case "windows":
+		userProfile := os.Getenv("USERPROFILE")
+		if userProfile == "" {
+			userProfile = os.Getenv("HOMEDRIVE") + os.Getenv("HOMEPATH")
+		}
+		downloadsDir = filepath.Join(userProfile, "Downloads")
+
+	case "darwin":
+		home := os.Getenv("HOME")
+		downloadsDir = filepath.Join(home, "Downloads")
+
+	case "linux":
+		xdgDownload := os.Getenv("XDG_DOWNLOAD_DIR")
+		if xdgDownload != "" {
+			downloadsDir = xdgDownload
+		} else {
+			home := os.Getenv("HOME")
+			downloadsDir = filepath.Join(home, "Downloads")
+		}
+
+	default:
+		downloadsDir, _ = os.Getwd()
+	}
+
+	if _, err := os.Stat(downloadsDir); os.IsNotExist(err) {
+		downloadsDir, _ = os.Getwd()
+	}
+
+	return downloadsDir
+}
+
+func downloadAttachment(client *api.Client, messageID string, att api.Attachment) {
+	data, err := client.DownloadAttachment(messageID, att.ID)
+	if err != nil {
+		return
+	}
+
+	downloadsDir := getDownloadsDir()
+	filePath := filepath.Join(downloadsDir, att.Filename)
+	counter := 1
+	baseName := strings.TrimSuffix(att.Filename, filepath.Ext(att.Filename))
+	ext := filepath.Ext(att.Filename)
+
+	for {
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			break
+		}
+		filePath = filepath.Join(downloadsDir, fmt.Sprintf("%s_%d%s", baseName, counter, ext))
+		counter++
+	}
+
+	_ = os.WriteFile(filePath, data, 0644)
 }
 
 func runTUI(accountData *storage.AccountData, client *api.Client) error {
