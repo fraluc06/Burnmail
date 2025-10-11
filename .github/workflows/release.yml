@@ -104,6 +104,18 @@ jobs:
         git commit -m "chore: bump version to ${{ inputs.version }}"
         git push -f origin release/v${{ inputs.version }}
 
+    - name: Create labels if they don't exist
+      env:
+        GITHUB_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
+      run: |
+        # Create 'release' label if it doesn't exist
+        gh label create release --description "Release PR" --color "0e8a16" --force || true
+        
+        # Create release type labels
+        gh label create patch --description "Patch release" --color "d4c5f9" --force || true
+        gh label create minor --description "Minor release" --color "c5def5" --force || true
+        gh label create major --description "Major release" --color "d93f0b" --force || true
+
     - name: Create Pull Request
       env:
         GITHUB_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
