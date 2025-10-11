@@ -78,6 +78,15 @@ var meCmd = &cobra.Command{
 	Run:   showAccount,
 }
 
+var versionCmd = &cobra.Command{
+	Use:     "v",
+	Aliases: []string{"version"},
+	Short:   "Show version information",
+	Run: func(_ *cobra.Command, _ []string) {
+		fmt.Printf("Burnmail v%s\n", Version)
+	},
+}
+
 func init() {
 	rootCmd.SetVersionTemplate("Burnmail v{{.Version}}\n")
 	rootCmd.AddCommand(generateCmd)
@@ -85,12 +94,12 @@ func init() {
 	messagesCmd.AddCommand(messagesListCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(meCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 func Execute() {
 	rootCmd.Version = Version
 	if err := rootCmd.Execute(); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
