@@ -1,6 +1,6 @@
 # Burnmail
 
-🔥 Temporary email addresses in your terminal - written in Go.
+🔥 A simple tool to manage temporary email addresses with a TUI
 
 Inspired by [Mailsy](https://github.com/BalliAsghar/Mailsy), using the [mail.tm](https://mail.tm) API.
 
@@ -13,11 +13,19 @@ Inspired by [Mailsy](https://github.com/BalliAsghar/Mailsy), using the [mail.tm]
 
 ## Installation
 
+### macOS/Linux (Homebrew)
+
+```bash
+brew install fraluc06/burnmail/burnmail
+```
+
+### Go Install
+
 ```bash
 go install github.com/fraluc06/burnmail@latest
 ```
 
-Or build from source:
+### Build from source
 ```bash
 git clone https://github.com/fraluc06/burnmail.git
 cd burnmail
@@ -49,11 +57,8 @@ $ burnmail g
 x9k2m5p7@mail.tm
 
 $ burnmail m
-📬 Fetching messages...
-Select an email (Use arrow keys)
-▸ Verify your email address - from noreply@example.com
-
-# Press Enter to read the message
+# Opens interactive TUI with message list
+# Use arrow keys to navigate, Enter to read messages
 ```
 
 ## Troubleshooting
