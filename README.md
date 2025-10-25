@@ -39,11 +39,21 @@ sudo mv burnmail /usr/local/bin/
 # Generate email (auto-copied to clipboard)
 burnmail g
 
-# Check inbox
+# Check inbox (interactive TUI)
 burnmail m
+
+# List messages (classic view)
+burnmail m list
+# or
+burnmail m ls
 
 # Show account
 burnmail me
+
+# Show version
+burnmail v
+# or
+burnmail version
 
 # Delete account
 burnmail d
@@ -59,6 +69,13 @@ x9k2m5p7@mail.tm
 $ burnmail m
 # Opens interactive TUI with message list
 # Use arrow keys to navigate, Enter to read messages
+
+$ burnmail m list
+# Shows classic list view of messages
+# Use arrow keys to select, Enter to read
+
+$ burnmail m ls
+# Same as list, shorter alias
 ```
 
 ## Troubleshooting

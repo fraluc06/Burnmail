@@ -60,9 +60,10 @@ var messagesCmd = &cobra.Command{
 }
 
 var messagesListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List messages (classic view)",
-	Run:   viewMessages,
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List messages (classic view)",
+	Run:     viewMessages,
 }
 
 var deleteCmd = &cobra.Command{
@@ -128,7 +129,6 @@ Fish:
 }
 
 func init() {
-	rootCmd.SetVersionTemplate("Burnmail v{{.Version}}\n")
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(messagesCmd)
 	messagesCmd.AddCommand(messagesListCmd)
@@ -139,7 +139,6 @@ func init() {
 }
 
 func Execute() {
-	rootCmd.Version = Version
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
