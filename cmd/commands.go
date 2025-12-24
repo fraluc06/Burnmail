@@ -84,7 +84,7 @@ var versionCmd = &cobra.Command{
 	Aliases: []string{"version"},
 	Short:   "Show version information",
 	Run: func(_ *cobra.Command, _ []string) {
-		fmt.Printf("Burnmail v%s\n", Version)
+		fmt.Printf("burnmail v%s\n", Version)
 	},
 }
 
