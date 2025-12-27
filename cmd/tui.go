@@ -19,7 +19,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jaytaylor/html2text"
 )
 
 type view int
@@ -339,20 +338,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, h := range m.selectedMsg.HTML {
 				htmlBuilder.WriteString(h)
 			}
-			text, err := html2text.FromString(htmlBuilder.String(), html2text.Options{
-				PrettyTables: true,
-				OmitLinks:    false,
-			})
-			if err == nil {
-				content.WriteString(text)
-				content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-				content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
-			} else {
-				content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
-				for _, h := range m.selectedMsg.HTML {
-					content.WriteString(h)
-				}
-			}
+			text := htmlToText(htmlBuilder.String())
+			content.WriteString(text)
+			content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+			content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
 		}
 
 		if len(m.selectedMsg.Attachments) > 0 {
@@ -612,20 +601,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							for _, h := range cached.HTML {
 								htmlBuilder.WriteString(h)
 							}
-							text, err := html2text.FromString(htmlBuilder.String(), html2text.Options{
-								PrettyTables: true,
-								OmitLinks:    false,
-							})
-							if err == nil {
-								content.WriteString(text)
-								content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-								content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
-							} else {
-								content.WriteString("[HTML content - press 'o' to open in browser]\n\n")
-								for _, h := range cached.HTML {
-									content.WriteString(h)
-								}
-							}
+							text := htmlToText(htmlBuilder.String())
+							content.WriteString(text)
+							content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+							content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
 						}
 
 						if len(cached.Attachments) > 0 {
