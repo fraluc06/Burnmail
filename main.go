@@ -4,7 +4,7 @@ import (
 	"burnmail/cmd"
 )
 
-var Version = "1.3.0"
+var Version = "1.4.0"
 
 func main() {
 	cmd.Version = Version

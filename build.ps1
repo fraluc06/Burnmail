@@ -6,7 +6,7 @@ param(
 )
 
 $BinaryName = "burnmail"
-$Version = "1.3.0"
+$Version = "1.4.0"
 
 Write-Host "🔨 Building Burnmail v$Version for Windows" -ForegroundColor Cyan
 Write-Host ""
