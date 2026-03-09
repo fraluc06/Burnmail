@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type view int
@@ -76,6 +76,7 @@ type model struct {
 	confirmAction  string
 	confirmData    interface{}
 	lastUpdate     time.Time
+	isDark         bool
 }
 
 type messagesLoadedMsg []api.Message
@@ -167,7 +168,7 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 		Bold(false)
 	t.SetStyles(s)
 
-	vp := viewport.New(100, 20)
+	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
@@ -176,9 +177,15 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 	ti := textinput.New()
 	ti.Placeholder = "Search messages (sender, subject, content)..."
 	ti.Prompt = " / "
-	ti.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
-	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	tiStyles := textinput.DefaultStyles(false)
+	tiStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
+	tiStyles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	tiStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	tiStyles.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
+	tiStyles.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	tiStyles.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	ti.SetStyles(tiStyles)
+	ti.SetWidth(80)
 	ti.CharLimit = 100
 
 	sp := spinner.New()
@@ -214,6 +221,7 @@ func (m model) Init() tea.Cmd {
 		loadMessages(m.client),
 		tickCmd(),
 		m.spinner.Tick,
+		tea.RequestBackgroundColor,
 	)
 }
 
@@ -295,13 +303,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.table.SetHeight(availableHeight)
 
-		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = availableHeight
+		m.viewport.SetWidth(msg.Width - 4)
+		m.viewport.SetHeight(availableHeight)
 
-		m.searchInput.Width = msg.Width - 20
-		if m.searchInput.Width < 20 {
-			m.searchInput.Width = 20
+		searchWidth := msg.Width - 20
+		if searchWidth < 20 {
+			searchWidth = 20
 		}
+		m.searchInput.SetWidth(searchWidth)
 
 		m.updateColumnWidths(msg.Width)
 
@@ -427,7 +436,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = fmt.Sprintf("Error after 3 retries: %v", msg)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.BackgroundColorMsg:
+		m.isDark = msg.IsDark()
+		m.applyStyles()
+		return m, nil
+
+	case tea.KeyPressMsg:
 		if m.currentView == confirmView {
 			switch msg.String() {
 			case "y", "Y":
@@ -562,7 +576,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case " ":
+		case "space":
 			if m.currentView == listView && m.bulkMode {
 				selectedIdx := m.table.Cursor()
 				if m.selectedItems[selectedIdx] {
@@ -667,73 +681,76 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, spinnerCmd)
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	var content string
 	if m.loading {
-		return titleStyle.Render(fmt.Sprintf("%s Loading...", m.spinner.View())) + "\n"
-	}
-
-	if m.err != nil {
-		return titleStyle.Render("Error: ") + m.err.Error() + "\n"
-	}
-
-	var s strings.Builder
-
-	if m.currentView != helpView {
-		msgCount := len(m.messages)
-		msgWord := "messages"
-		if msgCount == 1 {
-			msgWord = "message"
-		}
-		title := fmt.Sprintf("Burnmail - %s (%d %s)", m.accountData.Address, msgCount, msgWord)
-		s.WriteString(titleStyle.Render(title) + "\n")
-
-		if m.statusMessage != "" {
-			s.WriteString(statusStyle.Render("▸ "+m.statusMessage) + "\n")
-		}
-		s.WriteString("\n")
-	}
-
-	if m.currentView == listView {
-		var searchBox string
-		var tableStyle lipgloss.Style
-
-		if m.searchMode {
-			searchBox = searchBoxFocusedStyle.Render(m.searchInput.View())
-			tableStyle = baseStyle
-		} else {
-			searchBox = searchBoxStyle.Render(m.searchInput.View())
-			tableStyle = baseStyleFocused
-		}
-
-		s.WriteString(searchBox + "\n\n")
-		s.WriteString(tableStyle.Render(m.table.View()) + "\n\n")
-
-		sortNames := []string{"Date", "Sender", "Subject"}
-		sortInfo := fmt.Sprintf("Sort: %s", sortNames[m.sortBy])
-		s.WriteString(helpStyle.Render(sortInfo) + " ")
-		s.WriteString(helpStyle.Render("• Press "+keyStyle.Render("?")+" for help") + "\n")
-
-		helpText := keyStyle.Render("↑/↓") + "/" + keyStyle.Render("j/k") + ":navigate " + keyStyle.Render("enter") + ":open " + keyStyle.Render("s") + ":sort " + keyStyle.Render("c") + ":copy " + keyStyle.Render("v") + ":bulk " + keyStyle.Render("r") + ":refresh " + keyStyle.Render("/") + ":search "
-		if m.autoRefresh {
-			helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("ON")
-		} else {
-			helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("OFF")
-		}
-		if m.bulkMode {
-			helpText += " " + keyStyle.Render("space") + ":select " + keyStyle.Render("d") + ":delete"
-		}
-		helpText += " " + keyStyle.Render("q") + ":quit"
-		s.WriteString(helpStyle.Render(helpText))
-	} else if m.currentView == helpView {
-		s.WriteString(renderHelpScreen(m.width, m.height))
-	} else if m.currentView == confirmView {
-		s.WriteString(renderConfirmDialog(m.confirmData.(string)))
+		content = titleStyle.Render(fmt.Sprintf("%s Loading...", m.spinner.View())) + "\n"
+	} else if m.err != nil {
+		content = titleStyle.Render("Error: ") + m.err.Error() + "\n"
 	} else {
-		s.WriteString(baseStyle.Render(m.viewport.View()) + "\n")
-		s.WriteString(helpStyle.Render("↑/↓ • " + keyStyle.Render("o") + ":browser • " + keyStyle.Render("c") + ":copy • " + keyStyle.Render("d") + ":delete • esc • " + keyStyle.Render("?") + ":help"))
+		var s strings.Builder
+
+		if m.currentView != helpView {
+			msgCount := len(m.messages)
+			msgWord := "messages"
+			if msgCount == 1 {
+				msgWord = "message"
+			}
+			title := fmt.Sprintf("Burnmail - %s (%d %s)", m.accountData.Address, msgCount, msgWord)
+			s.WriteString(titleStyle.Render(title) + "\n")
+
+			if m.statusMessage != "" {
+				s.WriteString(statusStyle.Render("▸ "+m.statusMessage) + "\n")
+			}
+			s.WriteString("\n")
+		}
+
+		if m.currentView == listView {
+			var searchBox string
+			var tableStyle lipgloss.Style
+
+			if m.searchMode {
+				searchBox = searchBoxFocusedStyle.Render(m.searchInput.View())
+				tableStyle = baseStyle
+			} else {
+				searchBox = searchBoxStyle.Render(m.searchInput.View())
+				tableStyle = baseStyleFocused
+			}
+
+			s.WriteString(searchBox + "\n\n")
+			s.WriteString(tableStyle.Render(m.table.View()) + "\n\n")
+
+			sortNames := []string{"Date", "Sender", "Subject"}
+			sortInfo := fmt.Sprintf("Sort: %s", sortNames[m.sortBy])
+			s.WriteString(helpStyle.Render(sortInfo) + " ")
+			s.WriteString(helpStyle.Render("• Press "+keyStyle.Render("?")+" for help") + "\n")
+
+			helpText := keyStyle.Render("↑/↓") + "/" + keyStyle.Render("j/k") + ":navigate " + keyStyle.Render("enter") + ":open " + keyStyle.Render("s") + ":sort " + keyStyle.Render("c") + ":copy " + keyStyle.Render("v") + ":bulk " + keyStyle.Render("r") + ":refresh " + keyStyle.Render("/") + ":search "
+			if m.autoRefresh {
+				helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("ON")
+			} else {
+				helpText += keyStyle.Render("a") + ":auto:" + keyStyle.Render("OFF")
+			}
+			if m.bulkMode {
+				helpText += " " + keyStyle.Render("space") + ":select " + keyStyle.Render("d") + ":delete"
+			}
+			helpText += " " + keyStyle.Render("q") + ":quit"
+			s.WriteString(helpStyle.Render(helpText))
+		} else if m.currentView == helpView {
+			s.WriteString(renderHelpScreen(m.width, m.height))
+		} else if m.currentView == confirmView {
+			s.WriteString(renderConfirmDialog(m.confirmData.(string)))
+		} else {
+			s.WriteString(baseStyle.Render(m.viewport.View()) + "\n")
+			s.WriteString(helpStyle.Render("↑/↓ • " + keyStyle.Render("o") + ":browser • " + keyStyle.Render("c") + ":copy • " + keyStyle.Render("d") + ":delete • esc • " + keyStyle.Render("?") + ":help"))
+		}
+
+		content = s.String()
 	}
 
-	return s.String()
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 func (m *model) filterMessages() {
@@ -1125,12 +1142,34 @@ func downloadAttachment(client *api.Client, messageID string, att api.Attachment
 	_ = os.WriteFile(filePath, data, 0644)
 }
 
+func (m *model) applyStyles() {
+	tableStyles := table.DefaultStyles()
+	tableStyles.Header = tableStyles.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(false)
+	tableStyles.Selected = tableStyles.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+	m.table.SetStyles(tableStyles)
+
+	tiStyles := textinput.DefaultStyles(m.isDark)
+	tiStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
+	tiStyles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	tiStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	tiStyles.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
+	tiStyles.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	tiStyles.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	m.searchInput.SetStyles(tiStyles)
+}
+
 func runTUI(accountData *storage.AccountData, client *api.Client) error {
 	client.SetToken(accountData.Token)
 
 	p := tea.NewProgram(
 		initialModel(accountData, client),
-		tea.WithAltScreen(),
 	)
 
 	_, err := p.Run()
