@@ -307,6 +307,63 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshTable()
 		return m, tickCmd()
 
+	case messageDetailLoadedMsg:
+		m.selectedMsg = msg
+		m.messageDetails[m.selectedMsg.ID] = m.selectedMsg
+		m.currentView = detailView
+		m.loading = false
+		m.updateMessageSeen(m.selectedMsg.ID, true)
+		m.viewport.SetContent(m.renderMessageDetail(m.selectedMsg))
+		return m, nil
+
+	case bulkDeletedMsg:
+		deletedCount := len(m.selectedItems)
+		m.statusMessage = fmt.Sprintf("%d messages deleted", deletedCount)
+
+		selectedIDs := make(map[string]bool, deletedCount)
+		for idx := range m.selectedItems {
+			if idx < len(m.filteredMsgs) {
+				selectedIDs[m.filteredMsgs[idx].ID] = true
+			}
+		}
+
+		newMessages := make([]api.Message, 0, len(m.messages)-deletedCount)
+		for _, msg := range m.messages {
+			if !selectedIDs[msg.ID] {
+				newMessages = append(newMessages, msg)
+			}
+		}
+		m.messages = newMessages
+
+		m.selectedItems = make(map[int]bool)
+		m.bulkMode = false
+		m.refreshTable()
+		saveCache(m.messages)
+		return m, nil
+
+	case messageDeletedMsg:
+		m.statusMessage = "Message deleted"
+		m.currentView = listView
+		if m.selectedMsg != nil {
+			msgID := m.selectedMsg.ID
+			m.selectedMsg = nil
+			for i := range m.messages {
+				if m.messages[i].ID == msgID {
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					break
+				}
+			}
+			m.refreshTable()
+			saveCache(m.messages)
+		}
+		return m, nil
+
+	case tickMsg:
+		if m.autoRefresh && m.currentView == listView && !m.loading {
+			return m, tea.Batch(loadMessages(m.client), tickCmd())
+		}
+		return m, tickCmd()
+
 	case errMsg:
 		m.loading = false
 		m.retryCount++
