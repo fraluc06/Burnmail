@@ -358,11 +358,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(m.selectedMsg.Attachments))) + "\n\n")
 			for i, att := range m.selectedMsg.Attachments {
 				sizeKB := float64(att.Size) / 1024.0
-				content.WriteString(fmt.Sprintf("%d. %s (%s, %.1f KB)\n",
+				_, _ = fmt.Fprintf(&content, "%d. %s (%s, %.1f KB)\n",
 					i+1,
 					keyStyle.Render(att.Filename),
 					descStyle.Render(att.ContentType),
-					sizeKB))
+					sizeKB)
 			}
 			content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
 		}
@@ -626,11 +626,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(cached.Attachments))) + "\n\n")
 							for i, att := range cached.Attachments {
 								sizeKB := float64(att.Size) / 1024.0
-								content.WriteString(fmt.Sprintf("%d. %s (%s, %.1f KB)\n",
+								_, _ = fmt.Fprintf(&content, "%d. %s (%s, %.1f KB)\n",
 									i+1,
 									keyStyle.Render(att.Filename),
 									descStyle.Render(att.ContentType),
-									sizeKB))
+									sizeKB)
 							}
 							content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
 						}
@@ -705,7 +705,8 @@ func (m model) View() tea.View {
 			s.WriteString("\n")
 		}
 
-		if m.currentView == listView {
+		switch m.currentView {
+		case listView:
 			var searchBox string
 			var tableStyle lipgloss.Style
 
@@ -736,11 +737,11 @@ func (m model) View() tea.View {
 			}
 			helpText += " " + keyStyle.Render("q") + ":quit"
 			s.WriteString(helpStyle.Render(helpText))
-		} else if m.currentView == helpView {
+		case helpView:
 			s.WriteString(renderHelpScreen(m.width, m.height))
-		} else if m.currentView == confirmView {
+		case confirmView:
 			s.WriteString(renderConfirmDialog(m.confirmData.(string)))
-		} else {
+		default:
 			s.WriteString(baseStyle.Render(m.viewport.View()) + "\n")
 			s.WriteString(helpStyle.Render("↑/↓ • " + keyStyle.Render("o") + ":browser • " + keyStyle.Render("c") + ":copy • " + keyStyle.Render("d") + ":delete • esc • " + keyStyle.Render("?") + ":help"))
 		}
