@@ -139,7 +139,7 @@ var (
 				Padding(0, 1)
 )
 
-func initialModel(accountData *storage.AccountData, client *api.Client) model {
+func initialModel(accountData *storage.AccountData, client *api.Client) *model {
 	columns := []table.Column{
 		{Title: "✓", Width: 3},
 		{Title: "📎", Width: 3},
@@ -156,18 +156,6 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 		table.WithHeight(10),
 	)
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(false)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
-
 	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -177,14 +165,6 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 	ti := textinput.New()
 	ti.Placeholder = "Search messages (sender, subject, content)..."
 	ti.Prompt = " / "
-	tiStyles := textinput.DefaultStyles(false)
-	tiStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
-	tiStyles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	tiStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	tiStyles.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
-	tiStyles.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	tiStyles.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	ti.SetStyles(tiStyles)
 	ti.SetWidth(80)
 	ti.CharLimit = 100
 
@@ -198,7 +178,7 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 		msgs = cached.Messages
 	}
 
-	return model{
+	m := &model{
 		table:          t,
 		viewport:       vp,
 		searchInput:    ti,
@@ -214,9 +194,11 @@ func initialModel(accountData *storage.AccountData, client *api.Client) model {
 		selectedItems:  make(map[int]bool),
 		sortBy:         sortByDate,
 	}
+	m.applyStyles()
+	return m
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		loadMessages(m.client),
 		tickCmd(),
@@ -287,7 +269,7 @@ func bulkDeleteMessages(client *api.Client, ids []string) tea.Cmd {
 	}
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -322,104 +304,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.retryCount = 0
 		m.lastUpdate = time.Now()
 		saveCache(m.messages)
-		m.filterMessages()
-		m.sortMessages()
-		m.updateTableRows()
-		return m, nil
-
-	case messageDetailLoadedMsg:
-		m.selectedMsg = msg
-		m.messageDetails[m.selectedMsg.ID] = m.selectedMsg
-		m.currentView = detailView
-		m.loading = false
-		m.updateMessageSeen(m.selectedMsg.ID, true)
-
-		var content strings.Builder
-		content.WriteString(headerStyle.Render("From: ") + m.selectedMsg.From.Address + "\n")
-		content.WriteString(headerStyle.Render("Subject: ") + m.selectedMsg.Subject + "\n")
-		content.WriteString(headerStyle.Render("Date: ") + m.selectedMsg.CreatedAt.Format("02/01/2006 15:04:05") + "\n")
-		content.WriteString(separatorStyle.Render(strings.Repeat("─", 80)) + "\n\n")
-
-		if m.selectedMsg.Text != "" {
-			content.WriteString(m.selectedMsg.Text)
-		} else if len(m.selectedMsg.HTML) > 0 {
-			var htmlBuilder strings.Builder
-			for _, h := range m.selectedMsg.HTML {
-				htmlBuilder.WriteString(h)
-			}
-			text := htmlToText(htmlBuilder.String())
-			content.WriteString(text)
-			content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-			content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
-		}
-
-		if len(m.selectedMsg.Attachments) > 0 {
-			content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-			content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(m.selectedMsg.Attachments))) + "\n\n")
-			for i, att := range m.selectedMsg.Attachments {
-				sizeKB := float64(att.Size) / 1024.0
-				_, _ = fmt.Fprintf(&content, "%d. %s (%s, %.1f KB)\n",
-					i+1,
-					keyStyle.Render(att.Filename),
-					descStyle.Render(att.ContentType),
-					sizeKB)
-			}
-			content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
-		}
-
-		m.viewport.SetContent(content.String())
-		return m, nil
-
-	case bulkDeletedMsg:
-		deletedCount := len(m.selectedItems)
-		m.statusMessage = fmt.Sprintf("%d messages deleted", deletedCount)
-
-		selectedIDs := make(map[string]bool, deletedCount)
-		for idx := range m.selectedItems {
-			if idx < len(m.filteredMsgs) {
-				selectedIDs[m.filteredMsgs[idx].ID] = true
-			}
-		}
-
-		newMessages := make([]api.Message, 0, len(m.messages)-deletedCount)
-		for _, msg := range m.messages {
-			if !selectedIDs[msg.ID] {
-				newMessages = append(newMessages, msg)
-			}
-		}
-		m.messages = newMessages
-
-		m.selectedItems = make(map[int]bool)
-		m.bulkMode = false
-		m.filterMessages()
-		m.sortMessages()
-		m.updateTableRows()
-		saveCache(m.messages)
-		return m, nil
-
-	case messageDeletedMsg:
-		m.statusMessage = "Message deleted"
-		m.currentView = listView
-		if m.selectedMsg != nil {
-			msgID := m.selectedMsg.ID
-			m.selectedMsg = nil
-			for i := range m.messages {
-				if m.messages[i].ID == msgID {
-					m.messages = append(m.messages[:i], m.messages[i+1:]...)
-					break
-				}
-			}
-			m.filterMessages()
-			m.sortMessages()
-			m.updateTableRows()
-			saveCache(m.messages)
-		}
-		return m, nil
-
-	case tickMsg:
-		if m.autoRefresh && m.currentView == listView && !m.loading {
-			return m, tea.Batch(loadMessages(m.client), tickCmd())
-		}
+		m.refreshTable()
 		return m, tickCmd()
 
 	case errMsg:
@@ -473,10 +358,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				m.searchMode = false
 				m.searchInput.Blur()
-				m.filterMessages()
-				m.sortMessages()
-				m.updateTableRows()
-				return m, nil
+				m.refreshTable()
+				m.statusMessage = "Refreshing..."
+				return m, loadMessages(m.client)
 			default:
 				var cmd tea.Cmd
 				m.searchInput, cmd = m.searchInput.Update(msg)
@@ -485,44 +369,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "?":
-			m.previousView = m.currentView
-			m.currentView = helpView
-			return m, nil
-
-		case "q", "ctrl+c":
-			if m.currentView == listView {
-				return m.showConfirm("quit", "quit the application")
-			}
-			return m, tea.Quit
-
-		case "esc":
-			if m.currentView == detailView {
-				m.currentView = listView
-				m.selectedMsg = nil
-				return m, nil
-			}
-			return m, tea.Quit
-
-		case "j", "down":
-			if m.currentView == listView {
-				m.table.MoveDown(1)
-				return m, nil
-			}
-
-		case "k", "up":
-			if m.currentView == listView {
-				m.table.MoveUp(1)
-				return m, nil
-			}
-
-		case "r":
-			if m.currentView == listView {
-				m.loading = true
-				m.statusMessage = "Refreshing..."
-				return m, loadMessages(m.client)
-			}
-
 		case "/":
 			if m.currentView == listView {
 				m.searchMode = true
@@ -603,39 +449,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if cached, ok := m.messageDetails[msgID]; ok {
 						m.selectedMsg = cached
 						m.currentView = detailView
-						var content strings.Builder
-						content.WriteString(headerStyle.Render("From: ") + cached.From.Address + "\n")
-						content.WriteString(headerStyle.Render("Subject: ") + cached.Subject + "\n")
-						content.WriteString(headerStyle.Render("Date: ") + cached.CreatedAt.Format("02/01/2006 15:04:05") + "\n")
-						content.WriteString(separatorStyle.Render(strings.Repeat("─", 80)) + "\n\n")
-						if cached.Text != "" {
-							content.WriteString(cached.Text)
-						} else if len(cached.HTML) > 0 {
-							var htmlBuilder strings.Builder
-							for _, h := range cached.HTML {
-								htmlBuilder.WriteString(h)
-							}
-							text := htmlToText(htmlBuilder.String())
-							content.WriteString(text)
-							content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-							content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
-						}
-
-						if len(cached.Attachments) > 0 {
-							content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
-							content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(cached.Attachments))) + "\n\n")
-							for i, att := range cached.Attachments {
-								sizeKB := float64(att.Size) / 1024.0
-								_, _ = fmt.Fprintf(&content, "%d. %s (%s, %.1f KB)\n",
-									i+1,
-									keyStyle.Render(att.Filename),
-									descStyle.Render(att.ContentType),
-									sizeKB)
-							}
-							content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
-						}
-
-						m.viewport.SetContent(content.String())
+						m.viewport.SetContent(m.renderMessageDetail(cached))
 						return m, nil
 					}
 					m.loading = true
@@ -681,7 +495,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, spinnerCmd)
 }
 
-func (m model) View() tea.View {
+func (m *model) View() tea.View {
 	var content string
 	if m.loading {
 		content = titleStyle.Render(fmt.Sprintf("%s Loading...", m.spinner.View())) + "\n"
@@ -893,6 +707,10 @@ func (m *model) updateMessageSeen(id string, seen bool) {
 			break
 		}
 	}
+	m.refreshTable()
+}
+
+func (m *model) refreshTable() {
 	m.filterMessages()
 	m.sortMessages()
 	m.updateTableRows()
@@ -973,7 +791,7 @@ func saveCache(messages []api.Message) {
 	_ = os.WriteFile(cacheFile, data, 0600)
 }
 
-func (m model) showConfirm(action, description string) (tea.Model, tea.Cmd) {
+func (m *model) showConfirm(action, description string) (tea.Model, tea.Cmd) {
 	m.previousView = m.currentView
 	m.currentView = confirmView
 	m.confirmAction = action
@@ -981,7 +799,7 @@ func (m model) showConfirm(action, description string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) executeConfirmedAction() (tea.Model, tea.Cmd) {
+func (m *model) executeConfirmedAction() (tea.Model, tea.Cmd) {
 	m.currentView = m.previousView
 	action := m.confirmAction
 	m.confirmAction = ""
@@ -1010,6 +828,47 @@ func (m model) executeConfirmedAction() (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *model) renderMessageDetail(msg *api.MessageDetail) string {
+	var content strings.Builder
+	content.WriteString(headerStyle.Render("From: ") + msg.From.Address + "\n")
+	content.WriteString(headerStyle.Render("Subject: ") + msg.Subject + "\n")
+	content.WriteString(headerStyle.Render("Date: ") + msg.CreatedAt.Format("02/01/2006 15:04:05") + "\n")
+	content.WriteString(separatorStyle.Render(strings.Repeat("─", 80)) + "\n\n")
+
+	if msg.Text != "" {
+		content.WriteString(msg.Text)
+	} else if len(msg.HTML) > 0 {
+		var htmlBuilder strings.Builder
+		for _, h := range msg.HTML {
+			htmlBuilder.WriteString(h)
+		}
+		text := htmlToText(htmlBuilder.String())
+		content.WriteString(text)
+		content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+		content.WriteString(descStyle.Render("Press 'o' to open HTML in browser"))
+	}
+
+	if len(msg.Attachments) > 0 {
+		m.writeAttachments(&content, msg.Attachments)
+	}
+
+	return content.String()
+}
+
+func (m *model) writeAttachments(content *strings.Builder, attachments []api.Attachment) {
+	content.WriteString("\n\n" + separatorStyle.Render(strings.Repeat("─", 80)) + "\n")
+	content.WriteString(headerStyle.Render(fmt.Sprintf("📎 Attachments (%d)", len(attachments))) + "\n\n")
+	for i, att := range attachments {
+		sizeKB := float64(att.Size) / 1024.0
+		_, _ = fmt.Fprintf(content, "%d. %s (%s, %.1f KB)\n",
+			i+1,
+			keyStyle.Render(att.Filename),
+			descStyle.Render(att.ContentType),
+			sizeKB)
+	}
+	content.WriteString("\n" + descStyle.Render("Press '1-9' to download attachment, 'shift+a' to download all"))
 }
 
 func renderHelpScreen(_, _ int) string {
@@ -1096,11 +955,7 @@ func getDownloadsDir() string {
 		}
 		downloadsDir = filepath.Join(userProfile, "Downloads")
 
-	case "darwin":
-		home := os.Getenv("HOME")
-		downloadsDir = filepath.Join(home, "Downloads")
-
-	case "linux":
+	case "darwin", "linux":
 		xdgDownload := os.Getenv("XDG_DOWNLOAD_DIR")
 		if xdgDownload != "" {
 			downloadsDir = xdgDownload
